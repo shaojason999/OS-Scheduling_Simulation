@@ -29,6 +29,7 @@ void SIGALRM_handler(int sig_num)
 	printf("received %d\n",sig_num);
 //	printf("%ld %ld %ld %ld\n",new_val.it_interval.tv_sec,new_val.it_interval.tv_usec,new_val.it_value.tv_sec,new_val.it_value.tv_usec);
 	signal(SIGALRM, SIGALRM_handler);	/*set again to avoid error*/
+//
 }
 void signal_set()
 {
