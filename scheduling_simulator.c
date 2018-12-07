@@ -1,5 +1,7 @@
 #include <stdio.h>
 #include <signal.h>
+#include <string.h>
+#include <stdlib.h>
 #include <sys/time.h>
 #include "scheduling_simulator.h"
 
@@ -31,19 +33,71 @@ void SIGALRM_handler(int sig_num)
 	signal(SIGALRM, SIGALRM_handler);	/*set again to avoid error*/
 //
 }
+void input_handler()
+{
+	char str[100];
+	int task,time,priority,pid;
+	while(1){
+		memset(str,0,sizeof(str));
+		scanf("%s",str);
+		if(str[0]=='a'){
+			time=0, priority=0;	/*default*/
+			fgets(str,2,stdin);	/*discard one space(2=one space+one terminating null-char)*/
+			fgets(str,sizeof(str),stdin);	/*the rest of add command*/
+			task=str[4]-'0';
+			if(strlen(str)>=6){
+				if(str[7]=='t'){
+					if(str[9]=='L')
+						time=1;	/*time=1 is large*/
+					else if(str[9]=='S')
+						time=0;	/*time=0 is small*/
+				}else if(str[7]=='p'){
+					if(str[9]=='H')
+						priority=1;	/*priority=1 is high*/
+					else if(str[9]=='L')
+						priority=0;	/*priority=0 is low*/
+				}
+			}
+			if(strlen(str)>=11){
+				if(str[12]=='t'){
+					if(str[14]=='L')
+						time=1;	/*time=1 is large*/
+					else if(str[14]=='S')
+						time=0;	/*time=0 is small*/
+				}else if(str[12]=='p'){
+					if(str[14]=='H')
+						priority=1;	/*priority=1 is high*/
+					else if(str[14]=='L')
+						priority=0;	/*priority=0 is low*/
+				}
+			}
+		}else if(str[0]=='r'){
+			scanf("%s",str);
+			pid=atoi(str);
+		}else if(str[0]=='p'){
+			printf("ps\n");
+		}else if(str[0]=='s'){
+			printf("start\n");
+		}else
+			printf("wrong input, try again\n");
+//printf("task:%d time:%d priority:%d pid:%d\n",task,time,priority,pid);
+	}
+}
 void signal_set()
 {
 	signal(SIGALRM, SIGALRM_handler);	/*deal the SIGALRM signals with the programmer-defined function*/
-	new_val.it_interval.tv_sec=1;	/*period time in second*/
-	new_val.it_interval.tv_usec=200;	/*period time in micro second 10^-6*/
-	new_val.it_value.tv_sec=2;	/*remaining time(only used in the first time) in second*/
-	new_val.it_value.tv_usec=500;	/*remaining time(only used in the first time) in second*/
+	new_val.it_interval.tv_sec=0;	/*period time in second*/
+	new_val.it_interval.tv_usec=10000;	/*period time in microsecond 10^-6*/
+	new_val.it_value.tv_sec=0;	/*remaining time(only used in the first time) in second*/
+	new_val.it_value.tv_usec=100;	/*remaining time(only used in the first time) in microsecond*/
 	setitimer(ITIMER_REAL, &new_val, &curr_val);
 }
 int main()
 {
-	signal_set();
-	while(1){	
+//	signal_set();
+	input_handler();
+	while(1){
+
 		;
 	}
 
