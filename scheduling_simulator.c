@@ -5,7 +5,7 @@
 #include <sys/time.h>
 #include "scheduling_simulator.h"
 
-struct itimerval curr_val, new_val;
+struct itimerval old_val, cur_val, new_val;
 void hw_suspend(int msec_10)
 {
 	return;
@@ -34,7 +34,14 @@ void SIGALRM_handler(int sig_num)
 }
 void input_handler()
 {
-	signal(SIGTSTP, input_handler);	/*set again to avoid error*/
+	/*save the timer and then restor it before back to the simulation mode*/
+	getitimer(ITIMER_REAL, &old_val);
+	/*disable the timer in shell mode*/
+	new_val.it_value.tv_sec=0;	/*remaining time(only used in the first time) in second*/
+	new_val.it_value.tv_usec=0;	/*remaining time(only used in the first time) in microsecond*/
+	setitimer(ITIMER_REAL, &new_val, NULL);
+
+	signal(SIGTSTP, SIG_IGN);	/*ignore the ctrl+z in input_handler*/
 	char str[100];
 	int task,time,priority,pid;
 	while(1){
@@ -78,6 +85,8 @@ void input_handler()
 			printf("ps\n");
 		}else if(str[0]=='s'){
 			printf("start\n");
+			signal(SIGTSTP, input_handler);	/*reset the ctrl+z before return*/
+			setitimer(ITIMER_REAL, &old_val, NULL);	/*restore the timer before back to simulation mode*/
 			return;
 		}else
 			printf("wrong input, try again\n");
@@ -86,13 +95,13 @@ printf("task:%d time:%d priority:%d pid:%d\n",task,time,priority,pid);
 }
 void signal_set()
 {
+	signal(SIGTSTP, input_handler);
 	signal(SIGALRM, SIGALRM_handler);	/*deal the SIGALRM signals with the programmer-defined function*/
 	new_val.it_interval.tv_sec=0;	/*period time in second*/
 	new_val.it_interval.tv_usec=10000;	/*period time in microsecond 10^-6*/
 	new_val.it_value.tv_sec=0;	/*remaining time(only used in the first time) in second*/
-	new_val.it_value.tv_usec=100;	/*remaining time(only used in the first time) in microsecond*/
-	setitimer(ITIMER_REAL, &new_val, &curr_val);
-	signal(SIGTSTP, input_handler);
+	new_val.it_value.tv_usec=10000;	/*remaining time(only used in the first time) in microsecond*/
+	setitimer(ITIMER_REAL, &new_val, &old_val);
 }
 int main()
 {
