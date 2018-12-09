@@ -14,21 +14,20 @@
 
 /**/int count=0;
 
-struct itimerval old_val, cur_val, new_val;
-int newest_PID;
 struct PID{
 	int priority;	/*0 is low priority*/
 	int time;	/*0 is small*/
 	int task;	/*task1~task6*/
-	int status;	/*see the #define*/
-int created;
+	int state;	/*see the #define*/
 	ucontext_t *ctx;	/*context*/
 	int stack[1024];	/*assigned to ctx*/
 	struct PID *prev,*next;
 }*PID_inform[TOTAL_PID];
-struct PID *high_queue_cur,*high_queue_prev;	/*the running pid*/
-struct PID *low_queue_cur,*low_queue_prev;	/*the prev-running pid*/
-ucontext_t *new_ctx,*old_ctx;
+struct PID *high_queue_cur;	/*the running pid*/
+struct PID *low_queue_cur;	/*the prev-running pid*/
+struct itimerval old_val, cur_val, new_val;
+int newest_PID,pre_is_empty;
+ucontext_t *new_ctx,*old_ctx,*terminate_ctx;
 
 void hw_suspend(int msec_10)
 {
@@ -47,69 +46,58 @@ int hw_wakeup_taskname(char *task_name)
 
 int hw_task_create(char *task_name)
 {
-	int temp=task_name[4]-'0';
-	if(temp>6 || temp<1)
+	int task_num=task_name[4]-'0';
+	if(task_num>6 || task_num<1)
 		return -1;
 	return newest_PID++; // the pid of created task name
 }
 void terminate_state()
 {
-	
-}
-void create_a_new_task()
-{
-	high_queue_cur->created=1;
-	getcontext(new_ctx);
-	new_ctx->uc_stack.ss_sp=high_queue_cur->stack;
-	new_ctx->uc_stack.ss_size=sizeof(high_queue_cur->stack);
-//	new_ctx->uc_link=terminate_state;
-	switch(high_queue_cur->task){
-		case 1:	
-			makecontext(new_ctx,task1,0);
-			break;
-		case 2:
-			makecontext(new_ctx,task2,0);
-			break;
-		case 3:
-			makecontext(new_ctx,task3,0);
-			break;
-		case 4:
-			makecontext(new_ctx,task4,0);
-			break;
-		case 5:
-			makecontext(new_ctx,task5,0);
-			break;
-		case 6:
-			makecontext(new_ctx,task6,0);
-			break;
+	struct PID *temp;
+	pre_is_empty=1;
+	if(high_queue_cur!=NULL){
+		high_queue_cur->state=TERMINATED;
+
+		if(high_queue_cur->next!=high_queue_cur){
+			/*remove the task*/
+			temp=high_queue_cur->prev;
+			high_queue_cur->prev->next=high_queue_cur->next;
+			high_queue_cur->next->prev=temp;
+			
+			/*change the cur task*/
+			high_queue_cur=high_queue_cur->next;
+		}else{
+			high_queue_cur=NULL;
+		}
 	}
+
 }
 void scheduler(int sig_num)
 {
-printf("234\n");
+	signal(SIGALRM, scheduler);	/*set again to avoid error*/
+//printf("234\n");
 	if(high_queue_cur!=NULL){
-		high_queue_prev=high_queue_cur;
-		high_queue_cur=high_queue_cur->next;
-		old_ctx=high_queue_prev->ctx;
-		new_ctx=high_queue_cur->ctx;
-		/*creat and set a new task*/
-		if(high_queue_cur->created==0)
-			create_a_new_task();
+	
 		/*(save old and) run new*/
-count++;
-printf("%d\n",count);
-		if(high_queue_cur!=high_queue_prev)
+//count++;
+//printf("%d\n",count);
+		if(pre_is_empty==0){
+//printf("%d\n",high_queue_cur->time);
+			old_ctx=high_queue_cur->ctx;
+			high_queue_cur=high_queue_cur->next;	/*step into next task*/
+			new_ctx=high_queue_cur->ctx;
 			swapcontext(old_ctx,new_ctx);
-		else
-			setcontext(new_ctx);
+		}
+		else{	/*=1 has two conditions: (1)pre-task is terminated (2)a new start of high_queue or low_queue*/
+			pre_is_empty=0;	/*set to 0 before go to taskX()*/
+			setcontext(high_queue_cur->ctx);
+		}
 	}
-
 
 
 
 //	printf("received %d\n",sig_num);
 //	printf("%ld %ld %ld %ld\n",new_val.it_interval.tv_sec,new_val.it_interval.tv_usec,new_val.it_value.tv_sec,new_val.it_value.tv_usec);
-	signal(SIGALRM, scheduler);	/*set again to avoid error*/
 }
 /*add the new task to the prev of the running pid, that is, the end of the ready queue*/
 void add_ready_queue(int pid)
@@ -119,10 +107,11 @@ void add_ready_queue(int pid)
 			high_queue_cur=PID_inform[pid];
 			high_queue_cur->next=high_queue_cur;
 			high_queue_cur->prev=high_queue_cur;
+			pre_is_empty=1;
 		}else{	/*insert between cur and cur->prev*/
-			high_queue_cur->prev->next=PID_inform[pid];
 			PID_inform[pid]->prev=high_queue_cur->prev;
 			PID_inform[pid]->next=high_queue_cur;
+			high_queue_cur->prev->next=PID_inform[pid];
 			high_queue_cur->prev=PID_inform[pid];
 		}
 	}else if(PID_inform[pid]->priority==0){
@@ -130,12 +119,42 @@ void add_ready_queue(int pid)
 			low_queue_cur=PID_inform[pid];
 			low_queue_cur->next=low_queue_cur;
 			low_queue_cur->prev=low_queue_cur;
+			pre_is_empty=1;
 		}else{
-			low_queue_cur->prev->next=PID_inform[pid];
 			PID_inform[pid]->prev=low_queue_cur->prev;
 			PID_inform[pid]->next=low_queue_cur;
+			low_queue_cur->prev->next=PID_inform[pid];
 			low_queue_cur->prev=PID_inform[pid];
 		}
+	}
+}
+void create_a_new_task(int pid)
+{
+	ucontext_t *ctx;
+	ctx=PID_inform[pid]->ctx;
+	getcontext(ctx);
+	ctx->uc_stack.ss_sp=PID_inform[pid]->stack;
+	ctx->uc_stack.ss_size=sizeof(PID_inform[pid]->stack);
+	ctx->uc_link=terminate_ctx;
+	switch(PID_inform[pid]->task){
+		case 1:	
+			makecontext(ctx,task1,0);
+			break;
+		case 2:
+			makecontext(ctx,task2,0);
+			break;
+		case 3:
+			makecontext(ctx,task3,0);
+			break;
+		case 4:
+			makecontext(ctx,task4,0);
+			break;
+		case 5:
+			makecontext(ctx,task5,0);
+			break;
+		case 6:
+			makecontext(ctx,task6,0);
+			break;
 	}
 }
 void input_handler()
@@ -193,22 +212,23 @@ void input_handler()
 				PID_inform[pid]->priority=priority;
 				PID_inform[pid]->time=time;
 				PID_inform[pid]->task=task;
-				PID_inform[pid]->status=READY;
-PID_inform[pid]->created=0;
+				PID_inform[pid]->state=READY;
 				PID_inform[pid]->prev=NULL;
 				PID_inform[pid]->next=NULL;
 				add_ready_queue(pid);
+				create_a_new_task(pid);
 			}
 		}else if(str[0]=='r'){
 			scanf("%s",str);
 			rmv_pid=atoi(str);
 		}else if(str[0]=='p'){
 			printf("ps\n");
+		/*start the simulation!*/
 		}else if(str[0]=='s'){
 			printf("start\n");
 			signal(SIGTSTP, input_handler);	/*reset the ctrl+z before return*/
 			setitimer(ITIMER_REAL, &old_val, NULL);	/*restore the timer before back to simulation mode*/
-	//		printf("%d %d\n",old_val.it_value.tv_usec);
+//			printf("%d %d\n",old_val.it_value.tv_usec);
 //			printf("%d %d\n",old_val.it_interval.tv_usec);
 //	signal(SIGALRM, scheduler);	/*deal the SIGALRM signals with the programmer-defined function*/
 			return;
@@ -231,10 +251,12 @@ void init_variable_set()
 {
 	int i;
 	newest_PID=1;
+/**/	pre_is_empty=1;
 	for(i=0;i<TOTAL_PID;++i){
 		PID_inform[i]=malloc(sizeof(struct PID));
 		PID_inform[i]->ctx=malloc(sizeof(ucontext_t));
 	}
+	terminate_ctx=malloc(sizeof(ucontext_t));
 	low_queue_cur=NULL;
 	high_queue_cur=NULL;
 }
@@ -243,8 +265,12 @@ int main()
 	signal_set();
 	init_variable_set();
 	input_handler();
-	while(1){
 
+	pre_is_empty=0;	/*set to 0 before go to taskX()*/
+//	getcontext(terminate_ctx);
+	swapcontext(terminate_ctx,high_queue_cur->ctx);
+	terminate_state();
+	while(1){
 		;
 	}
 
