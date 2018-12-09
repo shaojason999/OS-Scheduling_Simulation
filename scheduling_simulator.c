@@ -74,13 +74,10 @@ void terminate_state()
 }
 void scheduler(int sig_num)
 {
-	signal(SIGALRM, scheduler);	/*set again to avoid error*/
+//	signal(SIGALRM, scheduler);	/*set again to avoid error*/
 //printf("234\n");
 	if(high_queue_cur!=NULL){
 	
-		/*(save old and) run new*/
-//count++;
-//printf("%d\n",count);
 		if(pre_is_empty==0){
 //printf("%d\n",high_queue_cur->time);
 			old_ctx=high_queue_cur->ctx;
@@ -94,7 +91,7 @@ void scheduler(int sig_num)
 		}
 	}
 
-
+//printf("123\n");
 
 //	printf("received %d\n",sig_num);
 //	printf("%ld %ld %ld %ld\n",new_val.it_interval.tv_sec,new_val.it_interval.tv_usec,new_val.it_value.tv_sec,new_val.it_value.tv_usec);
@@ -228,8 +225,7 @@ void input_handler()
 			printf("start\n");
 			signal(SIGTSTP, input_handler);	/*reset the ctrl+z before return*/
 			setitimer(ITIMER_REAL, &old_val, NULL);	/*restore the timer before back to simulation mode*/
-//			printf("%d %d\n",old_val.it_value.tv_usec);
-//			printf("%d %d\n",old_val.it_interval.tv_usec);
+//			printf("%ld\n",old_val.it_value.tv_usec);
 //	signal(SIGALRM, scheduler);	/*deal the SIGALRM signals with the programmer-defined function*/
 			return;
 		}else
@@ -242,7 +238,7 @@ void signal_set()
 	signal(SIGTSTP, input_handler);	/*ctrl+z to input_handler*/
 	signal(SIGALRM, scheduler);	/*deal the SIGALRM signals with the programmer-defined function*/
 	new_val.it_interval.tv_sec=0;	/*period time in second*/
-	new_val.it_interval.tv_usec=10000;	/*period time in microsecond 10^-6*/
+	new_val.it_interval.tv_usec=100000;	/*period time in microsecond 10^-6*/
 	new_val.it_value.tv_sec=0;	/*remaining time(only used in the first time) in second*/
 	new_val.it_value.tv_usec=10000;	/*remaining time(only used in the first time) in microsecond*/
 	setitimer(ITIMER_REAL, &new_val, &old_val);
@@ -253,10 +249,10 @@ void init_variable_set()
 	newest_PID=1;
 /**/	pre_is_empty=1;
 	for(i=0;i<TOTAL_PID;++i){
-		PID_inform[i]=malloc(sizeof(struct PID));
-		PID_inform[i]->ctx=malloc(sizeof(ucontext_t));
+		PID_inform[i]=(struct PID*)malloc(sizeof(struct PID));
+		PID_inform[i]->ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
 	}
-	terminate_ctx=malloc(sizeof(ucontext_t));
+	terminate_ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
 	low_queue_cur=NULL;
 	high_queue_cur=NULL;
 }
