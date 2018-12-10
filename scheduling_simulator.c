@@ -20,7 +20,8 @@ struct PID{
 	int task;	/*task1~task6*/
 	int state;	/*see the #define*/
 	ucontext_t *ctx;	/*context*/
-	int stack[1024];	/*assigned to ctx*/
+	/*stack should be large enough!!! because it may call scheduler() and input_handler(), otherwise, it may occur segmentation fault*/
+	int stack[16384];	/*assigned to ctx*/
 	struct PID *prev,*next;
 }*PID_inform[TOTAL_PID];
 struct PID *high_queue_cur;	/*the running pid*/
@@ -75,7 +76,6 @@ void terminate_state()
 void scheduler(int sig_num)
 {
 //	signal(SIGALRM, scheduler);	/*set again to avoid error*/
-//printf("234\n");
 	if(high_queue_cur!=NULL){
 	
 		if(pre_is_empty==0){
@@ -91,7 +91,7 @@ void scheduler(int sig_num)
 		}
 	}
 
-//printf("123\n");
+printf("123\n");
 
 //	printf("received %d\n",sig_num);
 //	printf("%ld %ld %ld %ld\n",new_val.it_interval.tv_sec,new_val.it_interval.tv_usec,new_val.it_value.tv_sec,new_val.it_value.tv_usec);
