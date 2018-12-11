@@ -6,6 +6,12 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include "scheduling_simulator.h"
+#ifdef _LP64
+ #define STACK_SIZE 2097152+16384
+#else
+ #define STACK_SIZE 16384
+#endif
+
 
 #define TOTAL_PID 100
 #define READY 0
@@ -22,14 +28,15 @@ struct PID{
 	int state;	/*see the #define*/
 	ucontext_t *ctx;	/*context*/
 	/*stack should be large enough!!! because it may call scheduler() and input_handler(), otherwise, it may occur segmentation fault*/
-	int stack[SIGSTKSZ];	/*assigned to ctx*/
+	int stack[STACK_SIZE];	/*assigned to ctx*/
 	struct PID *prev,*next;
 }*PID_inform[TOTAL_PID];
 struct PID *high_queue_cur;	/*the running pid*/
 struct PID *low_queue_cur;	/*the prev-running pid*/
 struct itimerval old_val,new_val;
 int newest_PID,pre_is_empty,running_queue;
-ucontext_t *new_ctx,*old_ctx,*terminate_ctx;
+ucontext_t *new_ctx,*old_ctx,*terminate_ctx,*back_from_terminate_ctx;
+int terminate_stack[STACK_SIZE];
 
 void hw_suspend(int msec_10)
 {
@@ -55,6 +62,8 @@ int hw_task_create(char *task_name)
 }
 void terminate_state()
 {
+	getcontext(terminate_ctx);
+
 	struct PID *temp;
 	pre_is_empty=1;
 	if(high_queue_cur!=NULL){
@@ -74,9 +83,11 @@ void terminate_state()
 	}
 //	signal(SIGTSTP,input_handler);
 
+	setcontext(back_from_terminate_ctx);
 }
 void scheduler(int sig_nunm)
 {
+printf("123\n");
 //	signal(SIGALRM, scheduler);	/*set again to avoid error*/
 //	signal(SIGTSTP,input_handler);
 	if(running_queue==0 && high_queue_cur!=NULL){	/*used when low to high*/
@@ -269,9 +280,16 @@ void init_variable_set()
 		PID_inform[i]=(struct PID*)malloc(sizeof(struct PID));
 		PID_inform[i]->ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
 	}
-	terminate_ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
 	low_queue_cur=NULL;
 	high_queue_cur=NULL;
+
+	terminate_ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
+	getcontext(terminate_ctx);
+	terminate_ctx->uc_stack.ss_sp=terminate_stack;
+	terminate_ctx->uc_stack.ss_size=sizeof(terminate_stack);
+	terminate_ctx->uc_link=back_from_terminate_ctx;
+	makecontext(terminate_ctx,terminate_state,0);
+
 }
 int main()
 {
@@ -281,8 +299,9 @@ int main()
 
 	pre_is_empty=0;	/*set to 0 before go to taskX()*/
 //	getcontext(terminate_ctx);
-/*high*/	swapcontext(terminate_ctx,high_queue_cur->ctx);
-	terminate_state();
+///*high*/	swapcontext(terminate_ctx,high_queue_cur->ctx);
+	swapcontext(back_from_terminate_ctx,high_queue_cur->ctx);
+//	terminate_state();
 	while(1){
 //		pause();
 		;
