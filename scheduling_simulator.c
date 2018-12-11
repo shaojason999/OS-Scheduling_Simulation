@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <ucontext.h>
+#include <unistd.h>
 #include <sys/time.h>
 #include "scheduling_simulator.h"
 
@@ -12,7 +13,7 @@
 #define WAITING 2
 #define TERMINATED 3
 
-/**/int count=0;
+void input_handler(int);
 
 struct PID{
 	int priority;	/*0 is low priority*/
@@ -21,13 +22,13 @@ struct PID{
 	int state;	/*see the #define*/
 	ucontext_t *ctx;	/*context*/
 	/*stack should be large enough!!! because it may call scheduler() and input_handler(), otherwise, it may occur segmentation fault*/
-	int stack[16384];	/*assigned to ctx*/
+	int stack[SIGSTKSZ];	/*assigned to ctx*/
 	struct PID *prev,*next;
 }*PID_inform[TOTAL_PID];
 struct PID *high_queue_cur;	/*the running pid*/
 struct PID *low_queue_cur;	/*the prev-running pid*/
-struct itimerval old_val, cur_val, new_val;
-int newest_PID,pre_is_empty;
+struct itimerval old_val,new_val;
+int newest_PID,pre_is_empty,running_queue;
 ucontext_t *new_ctx,*old_ctx,*terminate_ctx;
 
 void hw_suspend(int msec_10)
@@ -60,7 +61,7 @@ void terminate_state()
 		high_queue_cur->state=TERMINATED;
 
 		if(high_queue_cur->next!=high_queue_cur){
-			/*remove the task*/
+			/*remove the task from queue*/
 			temp=high_queue_cur->prev;
 			high_queue_cur->prev->next=high_queue_cur->next;
 			high_queue_cur->next->prev=temp;
@@ -71,15 +72,22 @@ void terminate_state()
 			high_queue_cur=NULL;
 		}
 	}
+//	signal(SIGTSTP,input_handler);
 
 }
-void scheduler(int sig_num)
+void scheduler(int sig_nunm)
 {
 //	signal(SIGALRM, scheduler);	/*set again to avoid error*/
+//	signal(SIGTSTP,input_handler);
+	if(running_queue==0 && high_queue_cur!=NULL){	/*used when low to high*/
+		low_queue_cur=low_queue_cur->next;
+		getcontext(low_queue_cur->ctx);
+		if(high_queue_cur==NULL)	/*after come back from high, later, when run again this task, keep from here*/
+			return;
+	}
 	if(high_queue_cur!=NULL){
-	
+		running_queue=1;
 		if(pre_is_empty==0){
-//printf("%d\n",high_queue_cur->time);
 			old_ctx=high_queue_cur->ctx;
 			high_queue_cur=high_queue_cur->next;	/*step into next task*/
 			new_ctx=high_queue_cur->ctx;
@@ -89,12 +97,21 @@ void scheduler(int sig_num)
 			pre_is_empty=0;	/*set to 0 before go to taskX()*/
 			setcontext(high_queue_cur->ctx);
 		}
+	}else if(low_queue_cur!=NULL){	/*every time high is finished, pre_is_empty=1*/
+		running_queue=0;
+		if(pre_is_empty==0){
+			old_ctx=low_queue_cur->ctx;
+			low_queue_cur=low_queue_cur->next;	/*step into next task*/
+			new_ctx=low_queue_cur->ctx;
+			swapcontext(old_ctx,new_ctx);
+		}
+		else{	/*=1 has two conditions: (1)pre-task is terminated (2)a new start of high_queue or low_queue*/
+			pre_is_empty=0;	/*set to 0 before go to taskX()*/
+			setcontext(low_queue_cur->ctx);
+		}
 	}
+//printf("123\n");
 
-printf("123\n");
-
-//	printf("received %d\n",sig_num);
-//	printf("%ld %ld %ld %ld\n",new_val.it_interval.tv_sec,new_val.it_interval.tv_usec,new_val.it_value.tv_sec,new_val.it_value.tv_usec);
 }
 /*add the new task to the prev of the running pid, that is, the end of the ready queue*/
 void add_ready_queue(int pid)
@@ -132,6 +149,7 @@ void create_a_new_task(int pid)
 	getcontext(ctx);
 	ctx->uc_stack.ss_sp=PID_inform[pid]->stack;
 	ctx->uc_stack.ss_size=sizeof(PID_inform[pid]->stack);
+//	ctx->uc_stack.ss_flags=0;
 	ctx->uc_link=terminate_ctx;
 	switch(PID_inform[pid]->task){
 		case 1:	
@@ -154,16 +172,17 @@ void create_a_new_task(int pid)
 			break;
 	}
 }
-void input_handler()
+void input_handler(int sig_num)
 {
+int i;
+printf("%d\n",&i);
 	/*save the timer and then restor it before back to the simulation mode*/
 	getitimer(ITIMER_REAL, &old_val);
 	/*disable the timer in shell mode*/
 	new_val.it_value.tv_sec=0;	/*remaining time(only used in the first time) in second*/
 	new_val.it_value.tv_usec=0;	/*remaining time(only used in the first time) in microsecond*/
 	setitimer(ITIMER_REAL, &new_val, NULL);
-
-	signal(SIGTSTP, SIG_IGN);	/*ignore the ctrl+z in input_handler*/
+//	signal(SIGTSTP, SIG_IGN);	/*ignore the ctrl+z in input_handler*/
 	char str[100],task_name[10];
 	int task,time,priority,pid,rmv_pid;
 	while(1){
@@ -223,10 +242,8 @@ void input_handler()
 		/*start the simulation!*/
 		}else if(str[0]=='s'){
 			printf("start\n");
-			signal(SIGTSTP, input_handler);	/*reset the ctrl+z before return*/
+//			signal(SIGTSTP, input_handler);	/*reset the ctrl+z before return*/
 			setitimer(ITIMER_REAL, &old_val, NULL);	/*restore the timer before back to simulation mode*/
-//			printf("%ld\n",old_val.it_value.tv_usec);
-//	signal(SIGALRM, scheduler);	/*deal the SIGALRM signals with the programmer-defined function*/
 			return;
 		}else
 			printf("wrong input, try again\n");
@@ -247,7 +264,7 @@ void init_variable_set()
 {
 	int i;
 	newest_PID=1;
-/**/	pre_is_empty=1;
+	running_queue=1;	/*initial set to high*/
 	for(i=0;i<TOTAL_PID;++i){
 		PID_inform[i]=(struct PID*)malloc(sizeof(struct PID));
 		PID_inform[i]->ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
@@ -260,15 +277,17 @@ int main()
 {
 	signal_set();
 	init_variable_set();
-	input_handler();
+	input_handler(0);
 
 	pre_is_empty=0;	/*set to 0 before go to taskX()*/
 //	getcontext(terminate_ctx);
-	swapcontext(terminate_ctx,high_queue_cur->ctx);
+/*high*/	swapcontext(terminate_ctx,high_queue_cur->ctx);
 	terminate_state();
 	while(1){
+//		pause();
 		;
 	}
+//	pause();
 
 	return 0;
 }
