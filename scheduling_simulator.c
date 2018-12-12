@@ -6,12 +6,12 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include "scheduling_simulator.h"
+
 #ifdef _LP64
  #define STACK_SIZE 2097152+16384
 #else
  #define STACK_SIZE 16384
 #endif
-
 
 #define TOTAL_PID 100
 #define READY 0
@@ -20,6 +20,7 @@
 #define TERMINATED 3
 
 void input_handler(int);
+void create_a_new_task(int pid);
 
 struct PID{
 	int priority;	/*0 is low priority*/
@@ -28,15 +29,16 @@ struct PID{
 	int state;	/*see the #define*/
 	ucontext_t *ctx;	/*context*/
 	/*stack should be large enough!!! because it may call scheduler() and input_handler(), otherwise, it may occur segmentation fault*/
-	int stack[STACK_SIZE];	/*assigned to ctx*/
+	char stack[STACK_SIZE];	/*assigned to ctx*/
 	struct PID *prev,*next;
 }*PID_inform[TOTAL_PID];
 struct PID *high_queue_cur;	/*the running pid*/
 struct PID *low_queue_cur;	/*the prev-running pid*/
 struct itimerval old_val,new_val;
-int newest_PID,pre_is_empty,running_queue;
-ucontext_t *new_ctx,*old_ctx,*terminate_ctx,*back_from_terminate_ctx;
-int terminate_stack[STACK_SIZE];
+int create_in_main,pid,newest_PID,running_queue;
+ucontext_t *new_ctx,*old_ctx,*terminate_ctx;
+ucontext_t *back_from_terminate_ctx,*back_from_main_ctx,*create_task_in_main_ctx;
+char terminate_stack[STACK_SIZE];
 
 void hw_suspend(int msec_10)
 {
@@ -63,9 +65,7 @@ int hw_task_create(char *task_name)
 void terminate_state()
 {
 	getcontext(terminate_ctx);
-
 	struct PID *temp;
-	pre_is_empty=1;
 	if(high_queue_cur!=NULL){
 		high_queue_cur->state=TERMINATED;
 
@@ -81,50 +81,56 @@ void terminate_state()
 			high_queue_cur=NULL;
 		}
 	}
-//	signal(SIGTSTP,input_handler);
+	else if(low_queue_cur!=NULL){
+		low_queue_cur->state=TERMINATED;
 
-	setcontext(back_from_terminate_ctx);
+		if(low_queue_cur->next!=low_queue_cur){
+			/*remove the task from queue*/
+			temp=low_queue_cur->prev;
+			low_queue_cur->prev->next=low_queue_cur->next;
+			low_queue_cur->next->prev=temp;
+			
+			/*change the cur task*/
+			low_queue_cur=low_queue_cur->next;
+		}else{
+			low_queue_cur=NULL;
+		}
+	}
+
+	if(high_queue_cur!=NULL){
+		setcontext(high_queue_cur->ctx);
+	}else if(low_queue_cur!=NULL){
+		setcontext(low_queue_cur->ctx);
+	}else{
+		setcontext(back_from_terminate_ctx);
+	}
 }
 void scheduler(int sig_nunm)
 {
-printf("123\n");
-//	signal(SIGALRM, scheduler);	/*set again to avoid error*/
-//	signal(SIGTSTP,input_handler);
-	if(running_queue==0 && high_queue_cur!=NULL){	/*used when low to high*/
-		low_queue_cur=low_queue_cur->next;
+	/*used when from low to high*/
+	if(running_queue==0 && high_queue_cur!=NULL){
 		getcontext(low_queue_cur->ctx);
-		if(high_queue_cur==NULL)	/*after come back from high, later, when run again this task, keep from here*/
+		if(high_queue_cur==NULL){
+			running_queue=0;
 			return;
+		}
+		running_queue=1;
+		setcontext(high_queue_cur->ctx);
 	}
 	if(high_queue_cur!=NULL){
 		running_queue=1;
-		if(pre_is_empty==0){
-			old_ctx=high_queue_cur->ctx;
-			high_queue_cur=high_queue_cur->next;	/*step into next task*/
-			new_ctx=high_queue_cur->ctx;
-			swapcontext(old_ctx,new_ctx);
-		}
-		else{	/*=1 has two conditions: (1)pre-task is terminated (2)a new start of high_queue or low_queue*/
-			pre_is_empty=0;	/*set to 0 before go to taskX()*/
-			setcontext(high_queue_cur->ctx);
-		}
+		old_ctx=high_queue_cur->ctx;
+		high_queue_cur=high_queue_cur->next;	/*step into next task*/
+		new_ctx=high_queue_cur->ctx;
+		swapcontext(old_ctx,new_ctx);
 	}else if(low_queue_cur!=NULL){	/*every time high is finished, pre_is_empty=1*/
 		running_queue=0;
-		if(pre_is_empty==0){
-			old_ctx=low_queue_cur->ctx;
-			low_queue_cur=low_queue_cur->next;	/*step into next task*/
-			new_ctx=low_queue_cur->ctx;
-			swapcontext(old_ctx,new_ctx);
-		}
-		else{	/*=1 has two conditions: (1)pre-task is terminated (2)a new start of high_queue or low_queue*/
-			pre_is_empty=0;	/*set to 0 before go to taskX()*/
-			setcontext(low_queue_cur->ctx);
-		}
+		old_ctx=low_queue_cur->ctx;
+		low_queue_cur=low_queue_cur->next;	/*step into next task*/
+		new_ctx=low_queue_cur->ctx;
+		swapcontext(old_ctx,new_ctx);
 	}
-//printf("123\n");
-
 }
-/*add the new task to the prev of the running pid, that is, the end of the ready queue*/
 void add_ready_queue(int pid)
 {
 	if(PID_inform[pid]->priority==1){
@@ -132,7 +138,7 @@ void add_ready_queue(int pid)
 			high_queue_cur=PID_inform[pid];
 			high_queue_cur->next=high_queue_cur;
 			high_queue_cur->prev=high_queue_cur;
-			pre_is_empty=1;
+		/*add the new task to the prev of the running pid, that is, the end of the ready queue*/
 		}else{	/*insert between cur and cur->prev*/
 			PID_inform[pid]->prev=high_queue_cur->prev;
 			PID_inform[pid]->next=high_queue_cur;
@@ -144,7 +150,6 @@ void add_ready_queue(int pid)
 			low_queue_cur=PID_inform[pid];
 			low_queue_cur->next=low_queue_cur;
 			low_queue_cur->prev=low_queue_cur;
-			pre_is_empty=1;
 		}else{
 			PID_inform[pid]->prev=low_queue_cur->prev;
 			PID_inform[pid]->next=low_queue_cur;
@@ -160,7 +165,6 @@ void create_a_new_task(int pid)
 	getcontext(ctx);
 	ctx->uc_stack.ss_sp=PID_inform[pid]->stack;
 	ctx->uc_stack.ss_size=sizeof(PID_inform[pid]->stack);
-//	ctx->uc_stack.ss_flags=0;
 	ctx->uc_link=terminate_ctx;
 	switch(PID_inform[pid]->task){
 		case 1:	
@@ -185,17 +189,15 @@ void create_a_new_task(int pid)
 }
 void input_handler(int sig_num)
 {
-int i;
-printf("%d\n",&i);
+	printf("\nshell mode:\n");
 	/*save the timer and then restor it before back to the simulation mode*/
 	getitimer(ITIMER_REAL, &old_val);
 	/*disable the timer in shell mode*/
 	new_val.it_value.tv_sec=0;	/*remaining time(only used in the first time) in second*/
 	new_val.it_value.tv_usec=0;	/*remaining time(only used in the first time) in microsecond*/
 	setitimer(ITIMER_REAL, &new_val, NULL);
-//	signal(SIGTSTP, SIG_IGN);	/*ignore the ctrl+z in input_handler*/
-	char str[100],task_name[10];
-	int task,time,priority,pid,rmv_pid;
+	char str[100],task_name[100];
+	int task,time,priority,rmv_pid;
 	while(1){
 		memset(str,0,sizeof(str));
 		scanf("%s",str);
@@ -243,7 +245,12 @@ printf("%d\n",&i);
 				PID_inform[pid]->prev=NULL;
 				PID_inform[pid]->next=NULL;
 				add_ready_queue(pid);
-				create_a_new_task(pid);
+				/*create here when there is no task in queue*/
+				if(create_in_main==0)
+					create_a_new_task(pid);
+				/*create in main when there is any task in queue*/
+				else
+					swapcontext(back_from_main_ctx,create_task_in_main_ctx);
 			}
 		}else if(str[0]=='r'){
 			scanf("%s",str);
@@ -253,12 +260,15 @@ printf("%d\n",&i);
 		/*start the simulation!*/
 		}else if(str[0]=='s'){
 			printf("start\n");
-//			signal(SIGTSTP, input_handler);	/*reset the ctrl+z before return*/
-			setitimer(ITIMER_REAL, &old_val, NULL);	/*restore the timer before back to simulation mode*/
+			/*restore the timer before back to simulation mode*/
+			setitimer(ITIMER_REAL, &old_val, NULL);
+			if(high_queue_cur==NULL && low_queue_cur==NULL)
+				continue;
+			create_in_main=1;
 			return;
 		}else
 			printf("wrong input, try again\n");
-printf("task:%d time:%d priority:%d rmv_pid:%d\n",task,time,priority,rmv_pid);
+printf("task:%d time:%d priority:%d pid:%d\n",task,time,priority,pid);
 	}
 }
 void signal_set()
@@ -274,6 +284,7 @@ void signal_set()
 void init_variable_set()
 {
 	int i;
+	create_in_main=0;
 	newest_PID=1;
 	running_queue=1;	/*initial set to high*/
 	for(i=0;i<TOTAL_PID;++i){
@@ -284,6 +295,9 @@ void init_variable_set()
 	high_queue_cur=NULL;
 
 	terminate_ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
+	back_from_terminate_ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
+	back_from_main_ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
+	create_task_in_main_ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
 	getcontext(terminate_ctx);
 	terminate_ctx->uc_stack.ss_sp=terminate_stack;
 	terminate_ctx->uc_stack.ss_size=sizeof(terminate_stack);
@@ -295,18 +309,27 @@ int main()
 {
 	signal_set();
 	init_variable_set();
-	input_handler(0);
-
-	pre_is_empty=0;	/*set to 0 before go to taskX()*/
-//	getcontext(terminate_ctx);
-///*high*/	swapcontext(terminate_ctx,high_queue_cur->ctx);
-	swapcontext(back_from_terminate_ctx,high_queue_cur->ctx);
-//	terminate_state();
-	while(1){
-//		pause();
-		;
+	getcontext(create_task_in_main_ctx);
+	/*create here when there is any task in queue*/
+	if(high_queue_cur!=NULL || low_queue_cur!=NULL){
+		create_a_new_task(pid);
+		setcontext(back_from_main_ctx);
 	}
-//	pause();
-
+	/*only when there is at least one task, it would return*/
+	input_handler(0);
+	while(1){
+		if(high_queue_cur!=NULL){
+			running_queue=1;
+			swapcontext(back_from_terminate_ctx,high_queue_cur->ctx);
+		}
+		else if(low_queue_cur!=NULL){
+			running_queue=0;
+			swapcontext(back_from_terminate_ctx,low_queue_cur->ctx);
+		}
+		else{
+			create_in_main=0;
+			input_handler(0);
+		}
+	}
 	return 0;
 }
