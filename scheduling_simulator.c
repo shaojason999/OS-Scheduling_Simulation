@@ -18,6 +18,7 @@
 #define RUNNING 1
 #define WAITING 2
 #define TERMINATED 3
+#define REMOVED 4
 
 void input_handler(int);
 void create_a_new_task(int pid);
@@ -26,7 +27,10 @@ struct PID{
 	int priority;	/*0 is low priority*/
 	int time;	/*0 is small*/
 	int task;	/*task1~task6*/
+	int pid;
 	int state;	/*see the #define*/
+	int queueing_time;
+	int remaining_time;	/*1 or 0*/
 	ucontext_t *ctx;	/*context*/
 	/*stack should be large enough!!! because it may call scheduler() and input_handler(), otherwise, it may occur segmentation fault*/
 	char stack[STACK_SIZE];	/*assigned to ctx*/
@@ -64,16 +68,19 @@ int hw_task_create(char *task_name)
 }
 void terminate_state()
 {
+	int i;
 	getcontext(terminate_ctx);
-	struct PID *temp;
+	for(i=1;i<newest_PID;++i){
+		if(PID_inform[i]->state==READY)
+			PID_inform[i]->queueing_time++;
+	}
 	if(high_queue_cur!=NULL){
 		high_queue_cur->state=TERMINATED;
 
 		if(high_queue_cur->next!=high_queue_cur){
 			/*remove the task from queue*/
-			temp=high_queue_cur->prev;
 			high_queue_cur->prev->next=high_queue_cur->next;
-			high_queue_cur->next->prev=temp;
+			high_queue_cur->next->prev=high_queue_cur->prev;
 			
 			/*change the cur task*/
 			high_queue_cur=high_queue_cur->next;
@@ -86,9 +93,8 @@ void terminate_state()
 
 		if(low_queue_cur->next!=low_queue_cur){
 			/*remove the task from queue*/
-			temp=low_queue_cur->prev;
 			low_queue_cur->prev->next=low_queue_cur->next;
-			low_queue_cur->next->prev=temp;
+			low_queue_cur->next->prev=low_queue_cur->prev;
 			
 			/*change the cur task*/
 			low_queue_cur=low_queue_cur->next;
@@ -98,8 +104,12 @@ void terminate_state()
 	}
 
 	if(high_queue_cur!=NULL){
+		high_queue_cur->state=RUNNING;
+		running_queue=1;
 		setcontext(high_queue_cur->ctx);
 	}else if(low_queue_cur!=NULL){
+		low_queue_cur->state=RUNNING;
+		running_queue=0;
 		setcontext(low_queue_cur->ctx);
 	}else{
 		setcontext(back_from_terminate_ctx);
@@ -107,29 +117,60 @@ void terminate_state()
 }
 void scheduler(int sig_nunm)
 {
+	int i;
+	for(i=1;i<newest_PID;++i){
+		if(PID_inform[i]->state==READY)
+			PID_inform[i]->queueing_time++;
+	}
 	/*used when from low to high*/
 	if(running_queue==0 && high_queue_cur!=NULL){
+		low_queue_cur->state=READY;
 		getcontext(low_queue_cur->ctx);
 		if(high_queue_cur==NULL){
+			low_queue_cur->state=RUNNING;
 			running_queue=0;
 			return;
 		}
+		high_queue_cur->state=RUNNING;
 		running_queue=1;
 		setcontext(high_queue_cur->ctx);
 	}
 	if(high_queue_cur!=NULL){
+		if(high_queue_cur->remaining_time==1){
+			high_queue_cur->remaining_time=0;
+			return;
+		}
+		/*step into next task*/
+		high_queue_cur->state=READY;
 		running_queue=1;
 		old_ctx=high_queue_cur->ctx;
-		high_queue_cur=high_queue_cur->next;	/*step into next task*/
+		high_queue_cur=high_queue_cur->next;
 		new_ctx=high_queue_cur->ctx;
+		high_queue_cur->state=RUNNING;
+
+		if(high_queue_cur->time==1)
+			high_queue_cur->remaining_time=1;
+
 		swapcontext(old_ctx,new_ctx);
 	}else if(low_queue_cur!=NULL){	/*every time high is finished, pre_is_empty=1*/
+		if(low_queue_cur->remaining_time==1){
+			low_queue_cur->remaining_time=0;
+			return;
+		}
+
+		low_queue_cur->state=READY;
 		running_queue=0;
 		old_ctx=low_queue_cur->ctx;
 		low_queue_cur=low_queue_cur->next;	/*step into next task*/
 		new_ctx=low_queue_cur->ctx;
+		low_queue_cur->state=RUNNING;
+
+		if(low_queue_cur->time==1)
+			low_queue_cur->remaining_time=1;
+
 		swapcontext(old_ctx,new_ctx);
-	}
+	}else /*both are NULL(caused by removed)*/
+		setcontext(back_from_terminate_ctx);
 }
 void add_ready_queue(int pid)
 {
@@ -240,8 +281,14 @@ void input_handler(int sig_num)
 			else{	/*pid set*/
 				PID_inform[pid]->priority=priority;
 				PID_inform[pid]->time=time;
+				if(time==1)
+					PID_inform[pid]->remaining_time=1;
+				else
+					PID_inform[pid]->remaining_time=0;
 				PID_inform[pid]->task=task;
+				PID_inform[pid]->pid=pid;
 				PID_inform[pid]->state=READY;
+				PID_inform[pid]->queueing_time=0;
 				PID_inform[pid]->prev=NULL;
 				PID_inform[pid]->next=NULL;
 				add_ready_queue(pid);
@@ -255,11 +302,49 @@ void input_handler(int sig_num)
 		}else if(str[0]=='r'){
 			scanf("%s",str);
 			rmv_pid=atoi(str);
+			if(rmv_pid<newest_PID && rmv_pid>0 && PID_inform[rmv_pid]->state!=REMOVED){
+				PID_inform[rmv_pid]->state=REMOVED;
+				if(PID_inform[rmv_pid]->next == PID_inform[rmv_pid]){
+					if(PID_inform[rmv_pid]->priority==1)
+						high_queue_cur=NULL;
+					else
+						low_queue_cur=NULL;
+				}
+				else{
+					PID_inform[rmv_pid]->prev->next=PID_inform[rmv_pid]->next;
+					PID_inform[rmv_pid]->next->prev=PID_inform[rmv_pid]->prev;
+
+					if(PID_inform[rmv_pid]->priority==1 && high_queue_cur->pid==rmv_pid)
+						high_queue_cur=high_queue_cur->next;
+					else if(PID_inform[rmv_pid]->priority==0 && low_queue_cur->pid==rmv_pid)
+						low_queue_cur=low_queue_cur->next;
+				}
+			}else
+				printf("wrong pid or already removed\n");
 		}else if(str[0]=='p'){
-			printf("ps\n");
+			int i;
+			for(i=1;i<newest_PID;++i){
+				if(PID_inform[i]->state==READY)
+					printf("%d\ttask%d\tTASK_READY\t%dms\t\t",i,PID_inform[i]->task,PID_inform[i]->queueing_time*10);
+				else if(PID_inform[i]->state==RUNNING)
+					printf("%d\ttask%d\tTASK_RUNNING\t%dms\t\t",i,PID_inform[i]->task,PID_inform[i]->queueing_time*10);
+				else if(PID_inform[i]->state==WAITING)
+					printf("%d\ttask%d\tTASK_WAITING\t%dms\t\t",i,PID_inform[i]->task,PID_inform[i]->queueing_time*10);
+				else if(PID_inform[i]->state==TERMINATED)
+					printf("%d\ttask%d\tTASK_TERMINATED\t%dms\t\t",i,PID_inform[i]->task,PID_inform[i]->queueing_time*10);
+				else/* if(PID_inform[i]->state==REMOVED)*/
+					printf("%d\ttask%d\tTASK_REMOVED\t%dms\t\t",i,PID_inform[i]->task,PID_inform[i]->queueing_time*10);
+				if(PID_inform[i]->priority==1)
+					printf("H\t");
+				else/* if(PID_inform[i]->priority==0)*/
+					printf("L\t");
+				if(PID_inform[i]->time==1)
+					printf("L\n");
+				else/* if(PID_inform[i]->time==0)*/
+					printf("S\n");
+			}
 		/*start the simulation!*/
 		}else if(str[0]=='s'){
-			printf("start\n");
 			/*restore the timer before back to simulation mode*/
 			setitimer(ITIMER_REAL, &old_val, NULL);
 			if(high_queue_cur==NULL && low_queue_cur==NULL)
@@ -268,7 +353,7 @@ void input_handler(int sig_num)
 			return;
 		}else
 			printf("wrong input, try again\n");
-printf("task:%d time:%d priority:%d pid:%d\n",task,time,priority,pid);
+//printf("task:%d time:%d priority:%d pid:%d\n",task,time,priority,pid);
 	}
 }
 void signal_set()
@@ -276,7 +361,7 @@ void signal_set()
 	signal(SIGTSTP, input_handler);	/*ctrl+z to input_handler*/
 	signal(SIGALRM, scheduler);	/*deal the SIGALRM signals with the programmer-defined function*/
 	new_val.it_interval.tv_sec=0;	/*period time in second*/
-	new_val.it_interval.tv_usec=100000;	/*period time in microsecond 10^-6*/
+	new_val.it_interval.tv_usec=10000;	/*period time in microsecond 10^-6*/
 	new_val.it_value.tv_sec=0;	/*remaining time(only used in the first time) in second*/
 	new_val.it_value.tv_usec=10000;	/*remaining time(only used in the first time) in microsecond*/
 	setitimer(ITIMER_REAL, &new_val, &old_val);
@@ -319,10 +404,12 @@ int main()
 	input_handler(0);
 	while(1){
 		if(high_queue_cur!=NULL){
+			high_queue_cur->state=RUNNING;
 			running_queue=1;
 			swapcontext(back_from_terminate_ctx,high_queue_cur->ctx);
 		}
 		else if(low_queue_cur!=NULL){
+			low_queue_cur->state=RUNNING;
 			running_queue=0;
 			swapcontext(back_from_terminate_ctx,low_queue_cur->ctx);
 		}
