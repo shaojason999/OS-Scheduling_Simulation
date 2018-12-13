@@ -83,16 +83,28 @@ void hw_suspend(int msec_10)
 
 void hw_wakeup_pid(int pid)
 {
-    PID_inform[pid]->waiting_time=0;
-    PID_inform[pid]->state=READY;
-    add_ready_queue(pid);
-    tasks_is_waiting--;
+    if(PID_inform[pid]->state==WAITING) {
+        PID_inform[pid]->waiting_time=0;
+        PID_inform[pid]->state=READY;
+        add_ready_queue(pid);
+        tasks_is_waiting--;
+    }
     return;
 }
 
 int hw_wakeup_taskname(char *task_name)
 {
-    return 0;
+    int i,j=0;
+    for(i=1; i<newest_PID; ++i) {
+        if(PID_inform[i]->task==3 && PID_inform[i]->state==WAITING) {
+            PID_inform[i]->waiting_time=0;
+            PID_inform[i]->state=READY;
+            add_ready_queue(i);
+            tasks_is_waiting--;
+            ++j;
+        }
+    }
+    return j;
 }
 
 int hw_task_create(char *task_name)
@@ -100,8 +112,7 @@ int hw_task_create(char *task_name)
     int task_num=task_name[4]-'0';
     if(task_num>6 || task_num<1)
         return -1;
-
-    if((running_queue==1 && high_queue_cur!=NULL && high_queue_cur->task==5) || (running_queue==0 && low_queue_cur!=NULL && low_queue_cur->task==5)) {
+    if((running_queue==1 && high_queue_cur!=NULL && (high_queue_cur->task==5 || high_queue_cur->task==6)) || (running_queue==0 && low_queue_cur!=NULL && (low_queue_cur->task==5 || low_queue_cur->task==6))) {
         pid=newest_PID;
         PID_inform[pid]->priority=0;
         PID_inform[pid]->time=0;
