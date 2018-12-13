@@ -229,7 +229,6 @@ void create_a_new_task(int pid)
 }
 void input_handler(int sig_num)
 {
-    printf("\nshell mode:\n");
     /*save the timer and then restor it before back to the simulation mode*/
     getitimer(ITIMER_REAL, &old_val);
     /*disable the timer in shell mode*/
@@ -239,6 +238,7 @@ void input_handler(int sig_num)
     char str[100],task_name[100];
     int task,time,priority,rmv_pid;
     while(1) {
+        printf("$ ");
         memset(str,0,sizeof(str));
         scanf("%s",str);
         if(str[0]=='a') {
@@ -348,6 +348,7 @@ void input_handler(int sig_num)
             if(high_queue_cur==NULL && low_queue_cur==NULL)
                 continue;
             create_in_main=1;
+            printf("simulating...\n");
             return;
         } else
             printf("wrong input, try again\n");
