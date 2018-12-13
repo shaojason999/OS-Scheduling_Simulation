@@ -20,6 +20,7 @@
 #define TERMINATED 3
 #define REMOVED 4
 
+void add_ready_queue(int pid);
 void input_handler(int);
 void create_a_new_task(int pid);
 
@@ -31,6 +32,7 @@ struct PID {
     int state;	/*see the #define*/
     int queueing_time;
     int remaining_time;	/*1 or 0*/
+    int waiting_time;	/*remaining time in waiting queue*/
     ucontext_t *ctx;	/*context*/
     /*stack should be large enough!!! because it may call scheduler() and input_handler(), otherwise, it may occur segmentation fault*/
     char stack[STACK_SIZE];	/*assigned to ctx*/
@@ -40,17 +42,51 @@ struct PID *high_queue_cur;	/*the running pid*/
 struct PID *low_queue_cur;	/*the prev-running pid*/
 struct itimerval old_val,new_val;
 int create_in_main,pid,newest_PID,running_queue;
+int tasks_is_waiting;
 ucontext_t *new_ctx,*old_ctx,*terminate_ctx;
 ucontext_t *back_from_terminate_ctx,*back_from_main_ctx,*create_task_in_main_ctx;
 char terminate_stack[STACK_SIZE];
 
 void hw_suspend(int msec_10)
 {
+    tasks_is_waiting++;
+    ucontext_t *temp;
+    if(running_queue==1) {
+        temp=high_queue_cur->ctx;
+        high_queue_cur->waiting_time=msec_10;
+        high_queue_cur->state=WAITING;
+        if(high_queue_cur->next==high_queue_cur) {
+            high_queue_cur=NULL;
+            swapcontext(temp,back_from_terminate_ctx);
+        } else {
+            high_queue_cur->prev->next=high_queue_cur->next;
+            high_queue_cur->next->prev=high_queue_cur->prev;
+            high_queue_cur=high_queue_cur->next;
+            swapcontext(temp,high_queue_cur->ctx);
+        }
+    } else {
+        temp=low_queue_cur->ctx;
+        low_queue_cur->waiting_time=msec_10;
+        low_queue_cur->state=WAITING;
+        if(low_queue_cur->next==low_queue_cur) {
+            low_queue_cur=NULL;
+            swapcontext(temp,back_from_terminate_ctx);
+        } else {
+            low_queue_cur->prev->next=low_queue_cur->next;
+            low_queue_cur->next->prev=low_queue_cur->prev;
+            low_queue_cur=low_queue_cur->next;
+            swapcontext(temp,low_queue_cur->ctx);
+        }
+    }
     return;
 }
 
 void hw_wakeup_pid(int pid)
 {
+    PID_inform[pid]->waiting_time=0;
+    PID_inform[pid]->state=READY;
+    add_ready_queue(pid);
+    tasks_is_waiting--;
     return;
 }
 
@@ -64,12 +100,29 @@ int hw_task_create(char *task_name)
     int task_num=task_name[4]-'0';
     if(task_num>6 || task_num<1)
         return -1;
+
+    if((running_queue==1 && high_queue_cur!=NULL && high_queue_cur->task==5) || (running_queue==0 && low_queue_cur!=NULL && low_queue_cur->task==5)) {
+        pid=newest_PID;
+        PID_inform[pid]->priority=0;
+        PID_inform[pid]->time=0;
+        PID_inform[pid]->remaining_time=0;
+        PID_inform[pid]->task=task_num;
+        PID_inform[pid]->pid=pid;
+        PID_inform[pid]->state=READY;
+        PID_inform[pid]->queueing_time=0;
+        PID_inform[pid]->prev=NULL;
+        PID_inform[pid]->next=NULL;
+        add_ready_queue(pid);
+
+        swapcontext(back_from_main_ctx,create_task_in_main_ctx);
+    }
     return newest_PID++; // the pid of created task name
 }
 void terminate_state()
 {
     int i;
     getcontext(terminate_ctx);
+    /*because if will run next task immediately later, add queueing_time here*/
     for(i=1; i<newest_PID; ++i) {
         if(PID_inform[i]->state==READY)
             PID_inform[i]->queueing_time++;
@@ -120,6 +173,18 @@ void scheduler(int sig_nunm)
     for(i=1; i<newest_PID; ++i) {
         if(PID_inform[i]->state==READY)
             PID_inform[i]->queueing_time++;
+    }
+    if(tasks_is_waiting) {
+        for(i=1; i<newest_PID; ++i) {
+            if(PID_inform[i]->state==WAITING) {
+                PID_inform[i]->waiting_time--;
+                if(PID_inform[i]->waiting_time==0) {
+                    PID_inform[i]->state=READY;
+                    add_ready_queue(i);
+                    tasks_is_waiting--;
+                }
+            }
+        }
     }
     /*used when from low to high*/
     if(running_queue==0 && high_queue_cur!=NULL) {
@@ -280,7 +345,7 @@ void input_handler(int sig_num)
             else {	/*pid set*/
                 PID_inform[pid]->priority=priority;
                 PID_inform[pid]->time=time;
-                if(time==1)
+                if(time==1 && task!=3)
                     PID_inform[pid]->remaining_time=1;
                 else
                     PID_inform[pid]->remaining_time=0;
@@ -371,6 +436,7 @@ void init_variable_set()
     create_in_main=0;
     newest_PID=1;
     running_queue=1;	/*initial set to high*/
+    tasks_is_waiting=0;
     for(i=0; i<TOTAL_PID; ++i) {
         PID_inform[i]=(struct PID*)malloc(sizeof(struct PID));
         PID_inform[i]->ctx=(ucontext_t*)malloc(sizeof(ucontext_t));
@@ -410,6 +476,8 @@ int main()
             low_queue_cur->state=RUNNING;
             running_queue=0;
             swapcontext(back_from_terminate_ctx,low_queue_cur->ctx);
+        } else if(tasks_is_waiting>0) {
+            ;
         } else {
             create_in_main=0;
             input_handler(0);
