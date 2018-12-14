@@ -2,16 +2,20 @@
 Command:
 -----------
 ./scheduling_simulation  
+
 (1)add Task1 -t L -p H  
-Task1~Task6  
--t L or -t S(default)  
--p H or -p L(default)  
+* Task1~Task6  
+* -t L or -t S(default)  
+* -p H or -p L(default)  
+
 (2)remove x  
->x is the PID  
+* x is the PID  
+
 (3)ps 
->show the inform  
+* show the inform  
+
 (4)start  
->ctrl+z to stop simulation and start to resume
+* ctrl+z to stop simulation and start to resume
 
 Note:
 -----------
