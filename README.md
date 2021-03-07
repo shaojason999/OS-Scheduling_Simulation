@@ -1,4 +1,4 @@
-# hw3-scheduling-simulation-shaojason999
+# OS-Scheduling_Simulation
 Command:
 -----------
 $./scheduling_simulation  
